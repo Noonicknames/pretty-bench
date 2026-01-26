@@ -1,11 +1,22 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use crate::{PrettyBench, PrettyBenchInner};
+
+/// FFI version of [PrettyBench]
+#[repr(C)]
+pub struct PrettyBenchFFI {
+    inner: *const PrettyBenchInner,
+}
 
 impl PrettyBenchFFI {
     pub unsafe fn into_rust(self) -> PrettyBench {
         PrettyBench {
             inner: unsafe { Arc::from_raw(self.inner) },
+        }
+    }
+    pub fn raw_copy(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
         }
     }
 }
@@ -18,45 +29,237 @@ impl Into<PrettyBenchFFI> for PrettyBench {
     }
 }
 
-/// FFI version of [PrettyBench]
 #[repr(C)]
-pub struct PrettyBenchFFI {
-    inner: *const PrettyBenchInner,
+#[derive(Clone)]
+pub struct StrFFI {
+    ptr: *const u8,
+    len: u64,
 }
 
-unsafe impl Send for PrettyBenchFFI {}
-unsafe impl Sync for PrettyBenchFFI {}
+impl From<&str> for StrFFI {
+    fn from(value: &str) -> Self {
+        let ptr = value.as_ptr();
+        let len = value.len() as u64;
+        StrFFI { ptr, len }
+    }
+}
 
-impl PrettyBenchFFI {
-    pub fn raw_copy(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
+impl<'a> TryInto<&'a str> for StrFFI {
+    type Error = ();
+    fn try_into(self) -> Result<&'a str, Self::Error> {
+        let StrFFI { ptr, len } = self;
+        if ptr.is_null() {
+            return Err(());
+        }
+
+        unsafe {
+            let slice = std::slice::from_raw_parts(ptr, len as usize);
+            Ok(std::str::from_utf8(slice).unwrap_or("Invalid utf8"))
         }
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn pretty_bench_init() -> PrettyBenchFFI {
-    println!("Bro just initialised pretty bench");
-
-    let pretty_bench = PrettyBench::new();
-
-    pretty_bench.into()
+#[repr(C)]
+#[derive(Clone)]
+pub struct ArcStrFFI {
+    ptr: *const u8,
+    len: u64,
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn pretty_bench_destroy(pretty_bench: *mut PrettyBenchFFI) {
-    unsafe {
-        pretty_bench.as_ref().unwrap().raw_copy().into_rust(); // Then gets dropped as an Arc
+impl From<ArcStrFFI> for StrFFI {
+    fn from(value: ArcStrFFI) -> Self {
+        Self {
+            ptr: value.ptr,
+            len: value.len,
+        }
+    }
+}
+
+impl From<Arc<str>> for ArcStrFFI {
+    fn from(value: Arc<str>) -> Self {
+        let ptr = value.as_ptr();
+        let len = value.len() as u64;
+
+        _ = Arc::into_raw(value);
+
+        ArcStrFFI { ptr, len }
+    }
+}
+
+impl TryInto<Arc<str>> for ArcStrFFI {
+    type Error = ();
+    fn try_into(self) -> Result<Arc<str>, Self::Error> {
+        let ArcStrFFI { ptr, len } = self;
+        if ptr.is_null() {
+            return Err(());
+        }
+
+        let arc_str = unsafe {
+            let slice = std::slice::from_raw_parts(ptr, len as usize);
+            std::str::from_utf8(slice).unwrap_or("Invalid utf8")
+        };
+        Ok(unsafe { Arc::from_raw(arc_str) })
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn pretty_bench_clone(pretty_bench: *const PrettyBenchFFI) -> PrettyBenchFFI {
-    let pretty_bench = unsafe { pretty_bench.as_ref().unwrap().raw_copy().into_rust() };
-    let pretty_bench_clone = pretty_bench.clone();
+pub extern "C" fn arc_str_new(ptr: *const u8, len: u64) -> ArcStrFFI {
+    let arc_str = unsafe {
+        let slice = std::slice::from_raw_parts(ptr, len as usize);
+        std::str::from_utf8(slice).unwrap_or("Invalid utf8")
+    };
+    let arc_str: Arc<str> = arc_str.into();
+    arc_str.into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn arc_str_clone(arc_str: ArcStrFFI) -> ArcStrFFI {
+    let arc_str: Arc<str> = arc_str
+        .try_into()
+        .expect("ArcStr is null, perhaps it is being used after being dropped.");
+    let copy = Arc::clone(&arc_str);
+    let _: ArcStrFFI = arc_str.into();
+    copy.into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn arc_str_drop(arc_str: *mut ArcStrFFI) {
+    let arc_str_mut = unsafe { arc_str.as_mut() }.expect("Pointer to ArcStr is null.");
+    let arc_str: Arc<str> = arc_str_mut
+        .clone()
+        .try_into()
+        .expect("Tried to drop a null ArcStr, perhaps you are dropping it twice?.");
+    arc_str_mut.len = 0;
+    arc_str_mut.ptr = std::ptr::null();
+
+    drop(arc_str);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_new() -> PrettyBenchFFI {
+    let pretty_bench = PrettyBench::new();
+    pretty_bench.into()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_new_group_individual(pretty_bench: PrettyBenchFFI, name: ArcStrFFI) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let name: Arc<str> = name
+        .try_into()
+        .expect("ArcStr is null, perhaps it is being used after being dropped.");
+    pretty_bench
+        .inner
+        .create_bench_group_individual(name.into());
+
+    let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_start_bench(pretty_bench: PrettyBenchFFI, name: StrFFI) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let name: &str = name
+        .try_into()
+        .expect("ArcStr is null, perhaps it is being used after being dropped.");
+    pretty_bench.inner.start_bench(name);
+
+    let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_end_bench(pretty_bench: PrettyBenchFFI, name: StrFFI, id: u64) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let name: &str = name
+        .try_into()
+        .expect("ArcStr is null, perhaps it is being used after being dropped.");
+    pretty_bench.inner.end_bench(name, id).unwrap();
+
+    let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_import_from_file(pretty_bench: PrettyBenchFFI, src: StrFFI) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let src: &str = src.try_into().unwrap();
+    let mut file =
+        std::io::BufReader::new(std::fs::OpenOptions::new().read(true).open(src).unwrap());
+    if let Err(err) = pretty_bench.inner.deserialise_import(&mut file) {
+        eprintln!("{}", err);
+    }
+    let _: PrettyBenchFFI = pretty_bench.into();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_serialise_to_file(pretty_bench: PrettyBenchFFI, dest: StrFFI) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let dest: &str = dest.try_into().unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(dest)
+        .unwrap();
+    if let Err(err) = pretty_bench.inner.serialise(&mut file) {
+        eprintln!("{}", err);
+    }
+    let _: PrettyBenchFFI = pretty_bench.into();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_serialise_append_to_file(pretty_bench: PrettyBenchFFI, dest: StrFFI) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let dest: &str = dest.try_into().unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dest)
+        .unwrap();
+    if let Err(err) = pretty_bench.inner.serialise(&mut file) {
+        eprintln!("{}", err);
+    }
+
+    let _: PrettyBenchFFI = pretty_bench.into();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_print_histograms(pretty_bench: PrettyBenchFFI) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+
+    pretty_bench.inner.print_histograms();
+
+    let _: PrettyBenchFFI = pretty_bench.into();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_new_group_bucketed(
+    pretty_bench: PrettyBenchFFI,
+    name: ArcStrFFI,
+    bucket_width_nanos: u64,
+) {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let name: Arc<str> = name
+        .try_into()
+        .expect("ArcStr is null, perhaps it is being used after being dropped.");
+
+    pretty_bench
+        .inner
+        .create_bench_group_bucketed(name, Duration::from_nanos(bucket_width_nanos));
+
+    let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_drop(pretty_bench: PrettyBenchFFI) {
+    unsafe {
+        pretty_bench.into_rust(); // Then gets dropped as an Arc
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn pb_clone(pretty_bench: PrettyBenchFFI) -> PrettyBenchFFI {
+    let pretty_bench = unsafe { pretty_bench.into_rust() };
+    let pb_clone = pretty_bench.clone();
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 
-    pretty_bench_clone.into()
+    pb_clone.into()
 }
