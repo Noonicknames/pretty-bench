@@ -11,7 +11,7 @@ pub(crate) mod ffi;
 #[repr(C)]
 #[derive(Clone)]
 pub struct PrettyBench {
-    inner: Arc<PrettyBenchInner>,
+    pub inner: Arc<PrettyBenchInner>,
 }
 
 pub struct PrettyBenchInner {
@@ -115,7 +115,10 @@ impl PrettyBenchInner {
     pub fn end_bench(&self, name: impl AsRef<str>, idx: u64) -> Result<Duration, ()> {
         // Record time at the start, we don't want to record the time it takes to lock the mutex.
         let end_time = Instant::now();
+        self.end_bench_with_instant(name, idx, end_time)
+    }
 
+    pub fn end_bench_with_instant(&self, name: impl AsRef<str>, idx: u64, end_time: Instant) -> Result<Duration, ()> {
         let benches_guard = self.benchgroups.guard();
         let bench = self
             .benchgroups
@@ -250,7 +253,8 @@ impl BenchGroup {
         }
     }
     pub fn print_histogram(&self) {
-        const BINS: usize = 10;
+        const BINS: usize = 32;
+        const MAX_HIST_HEIGHT: usize = 150;
         match self {
             Self::Bucketed { .. } => {
                 todo!()
@@ -277,7 +281,7 @@ impl BenchGroup {
 
                 let Some(range) = NonZeroU64::new(time_max - time_min) else {
                     println!(
-                        "{:>5} | {:#<width$}",
+                        "{:.5e} | {:#<width$}",
                         time_min as f32 * 1e-9,
                         "",
                         width = samples.len()
@@ -291,17 +295,23 @@ impl BenchGroup {
                     bins[((sample - time_min) * BINS as u64 / (range.get() + 1)) as usize] += 1;
                 }
 
-                let tallest_bin = samples.iter().cloned().max().unwrap();
+                let tallest_bin = bins.iter().cloned().max().unwrap();
 
                 for (idx, &bin) in bins.iter().enumerate() {
                     let time = time_min
                         + idx as u64 * range.get() / BINS as u64
                         + range.get() / BINS as u64 / 2;
+
+                    let hist_height = if tallest_bin > MAX_HIST_HEIGHT as u64 {
+                        (bin * MAX_HIST_HEIGHT as u64) / tallest_bin
+                    } else {
+                        bin
+                    };
                     println!(
-                        "{:>5} | {:#<width$}",
+                        "{:.5e} | {:#<width$}",
                         time as f32 * 1e-9,
                         "",
-                        width = bin as usize
+                        width = hist_height as usize
                     );
                 }
             }

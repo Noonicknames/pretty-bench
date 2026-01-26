@@ -2,7 +2,7 @@ module pretty_bench
     use iso_c_binding, only: c_ptr, c_long_long, c_loc, c_f_pointer, c_null_ptr
     implicit none
     private
-    public pb_new, PrettyBench, arc_str, ArcStr, ffi_str
+    public pb_sleep, pb_new, PrettyBench, arc_str, ArcStr, ffi_str
 
     type, bind(C) :: FFIStrRaw
         type(c_ptr) :: ptr = c_null_ptr
@@ -61,6 +61,11 @@ module pretty_bench
     end interface
 
     interface
+        subroutine pb_sleep_(nanos) bind(C, name = "pb_sleep")
+            use iso_c_binding, only: c_long_long
+            integer(c_long_long), value :: nanos
+        end subroutine pb_sleep_
+
         function arc_str_new_(ptr, len) result(out) bind(C, name = "arc_str_new")
             use iso_c_binding, only: c_ptr, c_long_long
             import :: ArcFFIStrRaw
@@ -156,6 +161,11 @@ module pretty_bench
         end function 
     end interface
 contains
+    subroutine pb_sleep(nanos)
+        use iso_fortran_env, only: int64
+        integer(int64) :: nanos
+        call pb_sleep_(nanos)
+    end subroutine pb_sleep
 
     ! FFIStr conversions with ffi_str(...)
     function ffi_str_scalar(input_str) result(res)

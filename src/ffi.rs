@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::{PrettyBench, PrettyBenchInner};
 
@@ -103,6 +106,11 @@ impl TryInto<Arc<str>> for ArcStrFFI {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn pb_sleep(nanos: u64) {
+    spin_sleep::sleep(Duration::from_nanos(nanos));
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn arc_str_new(ptr: *const u8, len: u64) -> ArcStrFFI {
     let arc_str = unsafe {
         let slice = std::slice::from_raw_parts(ptr, len as usize);
@@ -167,11 +175,15 @@ pub extern "C" fn pb_start_bench(pretty_bench: PrettyBenchFFI, name: StrFFI) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn pb_end_bench(pretty_bench: PrettyBenchFFI, name: StrFFI, id: u64) {
+    let now = Instant::now();
     let pretty_bench = unsafe { pretty_bench.into_rust() };
     let name: &str = name
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
-    pretty_bench.inner.end_bench(name, id).unwrap();
+    pretty_bench
+        .inner
+        .end_bench_with_instant(name, id, now)
+        .unwrap();
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 }
@@ -180,8 +192,16 @@ pub extern "C" fn pb_end_bench(pretty_bench: PrettyBenchFFI, name: StrFFI, id: u
 pub extern "C" fn pb_import_from_file(pretty_bench: PrettyBenchFFI, src: StrFFI) {
     let pretty_bench = unsafe { pretty_bench.into_rust() };
     let src: &str = src.try_into().unwrap();
-    let mut file =
-        std::io::BufReader::new(std::fs::OpenOptions::new().read(true).open(src).unwrap());
+    let file = match std::fs::OpenOptions::new().read(true).open(src) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("{}", err);
+            let _: PrettyBenchFFI = pretty_bench.into();
+            return;
+        }
+    };
+
+    let mut file = std::io::BufReader::new(file);
     if let Err(err) = pretty_bench.inner.deserialise_import(&mut file) {
         eprintln!("{}", err);
     }

@@ -1,6 +1,7 @@
 program pretty_bench_example
+    use iso_fortran_env, only: int64
     use iso_c_binding, only: c_long_long
-    use pretty_bench, only: PrettyBench, pb_new, ArcStr, arc_str, ffi_str
+    use pretty_bench, only: PrettyBench, pb_new, ArcStr, arc_str, ffi_str, pb_sleep
     implicit none
     type(PrettyBench) :: pb
     type(ArcStr) :: bench_group_name
@@ -23,9 +24,12 @@ program pretty_bench_example
     ! Example benchmark
     block
         integer(c_long_long) :: bench_id
-        bench_id = pb%start_bench(ffi_str(bench_group_name))
-        call sleep(1) ! Very intense computation
-        call pb%end_bench(ffi_str(bench_group_name), bench_id)
+        integer :: i
+        do i = 1, 1000
+            bench_id = pb%start_bench(ffi_str(bench_group_name))
+            call pb_sleep(100000_int64)
+            call pb%end_bench(ffi_str(bench_group_name), bench_id)
+        end do
     end block
 
     ! You can drop the ArcStr now, this will not delete pb's copy.
