@@ -1,0 +1,10 @@
+[package]
+name = "pretty-bench-common"
+edition = "2024"
+
+[dependencies]
+papaya = { workspace = true }
+spin_sleep = { workspace = true }
+
+[features]
+ffi = []

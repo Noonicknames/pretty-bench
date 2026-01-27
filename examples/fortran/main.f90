@@ -15,7 +15,7 @@ program pretty_bench_example
     ! Create PrettyBench struct
     pb = pb_new()
     
-    ! Ensure to clone since we still want to keep a copy of the group name.
+    ! Ensure to clone since we still want to keep a copy of the group name ourselves.
     call pb%new_group(bench_group_name%clone())
 
     ! Import previous benchmarks

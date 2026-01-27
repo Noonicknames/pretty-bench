@@ -151,7 +151,7 @@ module pretty_bench
 
         subroutine pb_drop_(pb) bind(C, name = "pb_drop")
             import :: PrettyBenchRaw
-            type(PrettyBenchRaw), value :: pb
+            type(PrettyBenchRaw), intent(inout) :: pb
         end subroutine pb_drop_
 
         function pb_clone_(pb) result(cloned_pb) bind(C, name = "pb_clone")
@@ -307,7 +307,7 @@ contains
 
 
     subroutine pb_drop(self)
-        class(PrettyBench), intent(in) :: self
+        class(PrettyBench), intent(inout) :: self
         call pb_drop_(self%inner)
     end subroutine pb_drop
 

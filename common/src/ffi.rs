@@ -155,22 +155,22 @@ pub extern "C" fn pb_new_group_individual(pretty_bench: PrettyBenchFFI, name: Ar
     let name: Arc<str> = name
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
-    pretty_bench
-        .inner
-        .create_bench_group_individual(name.into());
+    pretty_bench.create_bench_group_individual(name.into());
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn pb_start_bench(pretty_bench: PrettyBenchFFI, name: StrFFI) {
+pub extern "C" fn pb_start_bench(pretty_bench: PrettyBenchFFI, name: StrFFI) -> u64 {
     let pretty_bench = unsafe { pretty_bench.into_rust() };
     let name: &str = name
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
-    pretty_bench.inner.start_bench(name);
+    let bench_id = pretty_bench.start_bench(name);
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
+
+    bench_id
 }
 
 #[unsafe(no_mangle)]
@@ -180,10 +180,7 @@ pub extern "C" fn pb_end_bench(pretty_bench: PrettyBenchFFI, name: StrFFI, id: u
     let name: &str = name
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
-    pretty_bench
-        .inner
-        .end_bench_with_instant(name, id, now)
-        .unwrap();
+    pretty_bench.end_bench_with_instant(name, id, now).unwrap();
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 }
@@ -202,7 +199,7 @@ pub extern "C" fn pb_import_from_file(pretty_bench: PrettyBenchFFI, src: StrFFI)
     };
 
     let mut file = std::io::BufReader::new(file);
-    if let Err(err) = pretty_bench.inner.deserialise_import(&mut file) {
+    if let Err(err) = pretty_bench.deserialise_import(&mut file) {
         eprintln!("{}", err);
     }
     let _: PrettyBenchFFI = pretty_bench.into();
@@ -218,7 +215,7 @@ pub extern "C" fn pb_serialise_to_file(pretty_bench: PrettyBenchFFI, dest: StrFF
         .truncate(true)
         .open(dest)
         .unwrap();
-    if let Err(err) = pretty_bench.inner.serialise(&mut file) {
+    if let Err(err) = pretty_bench.serialise(&mut file) {
         eprintln!("{}", err);
     }
     let _: PrettyBenchFFI = pretty_bench.into();
@@ -233,7 +230,7 @@ pub extern "C" fn pb_serialise_append_to_file(pretty_bench: PrettyBenchFFI, dest
         .append(true)
         .open(dest)
         .unwrap();
-    if let Err(err) = pretty_bench.inner.serialise(&mut file) {
+    if let Err(err) = pretty_bench.serialise(&mut file) {
         eprintln!("{}", err);
     }
 
@@ -244,7 +241,7 @@ pub extern "C" fn pb_serialise_append_to_file(pretty_bench: PrettyBenchFFI, dest
 pub extern "C" fn pb_print_histograms(pretty_bench: PrettyBenchFFI) {
     let pretty_bench = unsafe { pretty_bench.into_rust() };
 
-    pretty_bench.inner.print_histograms();
+    pretty_bench.print_histograms();
 
     let _: PrettyBenchFFI = pretty_bench.into();
 }
@@ -260,17 +257,16 @@ pub extern "C" fn pb_new_group_bucketed(
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
 
-    pretty_bench
-        .inner
-        .create_bench_group_bucketed(name, Duration::from_nanos(bucket_width_nanos));
+    pretty_bench.create_bench_group_bucketed(name, Duration::from_nanos(bucket_width_nanos));
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn pb_drop(pretty_bench: PrettyBenchFFI) {
+pub extern "C" fn pb_drop(pretty_bench: *mut PrettyBenchFFI) {
     unsafe {
-        pretty_bench.into_rust(); // Then gets dropped as an Arc
+        pretty_bench.read().into_rust(); // Then gets dropped as an Arc
+        pretty_bench.as_mut().expect("PrettyBench pointer is null, perhaps it is being used after being dropped or dropped twice?").inner = std::ptr::null_mut();
     }
 }
 

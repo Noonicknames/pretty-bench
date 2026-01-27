@@ -25,8 +25,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty-bench"
-version = "0.1.0"
+name = "pretty-bench-bindings"
+version = "0.0.0"
+dependencies = [
+ "pretty-bench-common",
+]
+
+[[package]]
+name = "pretty-bench-common"
+version = "0.0.0"
 dependencies = [
  "papaya",
  "spin_sleep",

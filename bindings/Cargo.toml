@@ -1,0 +1,11 @@
+[package]
+name = "pretty-bench-bindings"
+edition = "2024"
+
+[lib]
+name = "pretty_bench"
+crate-type = ["cdylib", "staticlib"]
+
+
+[dependencies]
+pretty-bench-common = { path = "../common", features = ["ffi"]}
