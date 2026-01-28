@@ -8,4 +8,4 @@ crate-type = ["cdylib", "staticlib"]
 
 
 [dependencies]
-pretty-bench-common = { path = "../common", features = ["ffi"]}
+pretty-bench = { path = "../pretty-bench", features = ["ffi"]}

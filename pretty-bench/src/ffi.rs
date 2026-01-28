@@ -5,6 +5,28 @@ use std::{
 
 use crate::{PrettyBench, PrettyBenchInner};
 
+#[repr(C)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DurationFFI {
+    nanos: u32,
+    secs: u64,
+}
+
+impl From<Duration> for DurationFFI {
+    fn from(value: Duration) -> Self {
+        Self {
+            nanos: value.subsec_nanos(),
+            secs: value.as_secs(),
+        }
+    }
+}
+
+impl Into<Duration> for DurationFFI {
+    fn into(self) -> Duration {
+        Duration::new(self.secs, self.nanos)
+    }
+}
+
 /// FFI version of [PrettyBench]
 #[repr(C)]
 pub struct PrettyBenchFFI {
@@ -106,8 +128,8 @@ impl TryInto<Arc<str>> for ArcStrFFI {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn pb_sleep(nanos: u64) {
-    spin_sleep::sleep(Duration::from_nanos(nanos));
+pub extern "C" fn pb_sleep(duration: DurationFFI) {
+    spin_sleep::sleep(duration.into());
 }
 
 #[unsafe(no_mangle)]
@@ -161,26 +183,25 @@ pub extern "C" fn pb_new_group_individual(pretty_bench: PrettyBenchFFI, name: Ar
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn pb_start_bench(pretty_bench: PrettyBenchFFI, name: StrFFI) -> u64 {
+pub extern "C" fn pb_start_bench(pretty_bench: PrettyBenchFFI) -> DurationFFI {
     let pretty_bench = unsafe { pretty_bench.into_rust() };
-    let name: &str = name
-        .try_into()
-        .expect("ArcStr is null, perhaps it is being used after being dropped.");
-    let bench_id = pretty_bench.start_bench(name);
+    let start_instant = pretty_bench.start_instant();
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 
-    bench_id
+    (Instant::now() - start_instant).into()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn pb_end_bench(pretty_bench: PrettyBenchFFI, name: StrFFI, id: u64) {
+pub extern "C" fn pb_end_bench(pretty_bench: PrettyBenchFFI, name: StrFFI, start: DurationFFI) {
     let now = Instant::now();
     let pretty_bench = unsafe { pretty_bench.into_rust() };
     let name: &str = name
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
-    pretty_bench.end_bench_with_instant(name, id, now).unwrap();
+    let start: Duration = start.into();
+    let start_instant = pretty_bench.start_instant();
+    pretty_bench.end_bench_with_instant(name, start_instant + start, now).unwrap();
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 }
@@ -209,12 +230,14 @@ pub extern "C" fn pb_import_from_file(pretty_bench: PrettyBenchFFI, src: StrFFI)
 pub extern "C" fn pb_serialise_to_file(pretty_bench: PrettyBenchFFI, dest: StrFFI) {
     let pretty_bench = unsafe { pretty_bench.into_rust() };
     let dest: &str = dest.try_into().unwrap();
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(dest)
-        .unwrap();
+    let mut file = std::io::BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(dest)
+            .unwrap(),
+    );
     if let Err(err) = pretty_bench.serialise(&mut file) {
         eprintln!("{}", err);
     }
@@ -250,14 +273,14 @@ pub extern "C" fn pb_print_histograms(pretty_bench: PrettyBenchFFI) {
 pub extern "C" fn pb_new_group_bucketed(
     pretty_bench: PrettyBenchFFI,
     name: ArcStrFFI,
-    bucket_width_nanos: u64,
+    bucket_width: DurationFFI,
 ) {
     let pretty_bench = unsafe { pretty_bench.into_rust() };
     let name: Arc<str> = name
         .try_into()
         .expect("ArcStr is null, perhaps it is being used after being dropped.");
 
-    pretty_bench.create_bench_group_bucketed(name, Duration::from_nanos(bucket_width_nanos));
+    pretty_bench.create_bench_group_bucketed(name, bucket_width.into());
 
     let _: PrettyBenchFFI = pretty_bench.into(); // Basically leak it again.
 }

@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty-bench-bindings"
+name = "pretty-bench-example"
 version = "0.0.0"
 dependencies = [
  "pretty-bench",

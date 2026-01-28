@@ -1,7 +1,7 @@
 use std::{
     io::{Read, Write},
-    sync::{atomic::AtomicU64, Arc, Mutex},
-    time::{Duration, Instant, SystemTime},
+    sync::{Arc, atomic::AtomicU64},
+    time::{Duration, Instant},
 };
 
 use crate::BenchGroup;
@@ -12,6 +12,17 @@ pub struct PrettyBench {
 }
 
 impl PrettyBench {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(PrettyBenchInner {
+                start_instant: Instant::now(),
+                benchgroups: papaya::HashMap::new(),
+            }),
+        }
+    }
+    pub fn start_instant(&self) -> Instant {
+        self.inner.start_instant()
+    }
     pub fn create_bench_group_individual(&self, name: Arc<str>) {
         self.inner.create_bench_group_individual(name);
     }
@@ -29,29 +40,33 @@ impl PrettyBench {
         self.inner.deserialise_import(input)
     }
 
-    pub fn start_bench(&self, name: impl AsRef<str>) -> u64 {
-        self.inner.start_bench(name)
+    pub fn start_bench(&self) -> Instant {
+        self.inner.start_bench()
     }
 
-    pub fn end_bench(&self, name: impl AsRef<str>, idx: u64) -> Result<Duration, ()> {
-        self.inner.end_bench(name, idx)
+    pub fn end_bench(&self, name: impl AsRef<str>, start: Instant) -> Result<Duration, ()> {
+        self.inner.end_bench(name, start)
     }
 
     pub fn end_bench_with_instant(
         &self,
         name: impl AsRef<str>,
-        idx: u64,
+        start: Instant,
         end_time: Instant,
     ) -> Result<Duration, ()> {
-        self.inner.end_bench_with_instant(name, idx, end_time)
+        self.inner.end_bench_with_end_instant(name, start, end_time)
     }
 }
 
 pub struct PrettyBenchInner {
+    start_instant: Instant,
     benchgroups: papaya::HashMap<Arc<str>, BenchGroup>,
 }
 
 impl PrettyBenchInner {
+    pub fn start_instant(&self) -> Instant {
+        self.start_instant
+    }
     pub fn create_bench_group_individual(&self, name: Arc<str>) {
         self.benchgroups
             .pin()
@@ -103,55 +118,21 @@ impl PrettyBenchInner {
 
         Ok(())
     }
-    pub fn start_bench(&self, name: impl AsRef<str>) -> u64 {
-        let name = name.as_ref();
-        let benches_guard = self.benchgroups.guard();
-
-        let bench = self
-            .benchgroups
-            .get(name, &benches_guard)
-            .unwrap_or_else(|| {
-                let name: Arc<str> = name.into();
-                self.benchgroups.get_or_insert_with(
-                    Arc::clone(&name),
-                    || BenchGroup::Individual {
-                        name,
-                        date: SystemTime::now(),
-                        idx_counter: AtomicU64::new(0),
-                        pending: papaya::HashMap::new(),
-                        samples: Mutex::new(Vec::new()),
-                    },
-                    &benches_guard,
-                )
-            });
-
-        let (BenchGroup::Individual {
-            idx_counter,
-            pending,
-            ..
-        }
-        | BenchGroup::Bucketed {
-            idx_counter,
-            pending,
-            ..
-        }) = bench;
-
-        let idx = idx_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        pending.pin().insert(idx, Instant::now());
-        idx
+    pub fn start_bench(&self) -> Instant {
+        Instant::now()
     }
 
-    pub fn end_bench(&self, name: impl AsRef<str>, idx: u64) -> Result<Duration, ()> {
+    pub fn end_bench(&self, name: impl AsRef<str>, start: Instant) -> Result<Duration, ()> {
         // Record time at the start, we don't want to record the time it takes to lock the mutex.
         let end_time = Instant::now();
-        self.end_bench_with_instant(name, idx, end_time)
+        self.end_bench_with_end_instant(name, start, end_time)
     }
 
-    pub fn end_bench_with_instant(
+    pub fn end_bench_with_end_instant(
         &self,
         name: impl AsRef<str>,
-        idx: u64,
-        end_time: Instant,
+        start: Instant,
+        end: Instant,
     ) -> Result<Duration, ()> {
         let benches_guard = self.benchgroups.guard();
         let bench = self
@@ -159,10 +140,7 @@ impl PrettyBenchInner {
             .get(name.as_ref(), &benches_guard)
             .ok_or(())?;
 
-        let (BenchGroup::Individual { pending, .. } | BenchGroup::Bucketed { pending, .. }) = bench;
-
-        let start_time = pending.pin().remove(&idx).ok_or(())?.clone();
-        let duration = end_time - start_time;
+        let duration = end - start;
 
         match bench {
             BenchGroup::Bucketed {
@@ -184,15 +162,5 @@ impl PrettyBenchInner {
         }
 
         Ok(duration)
-    }
-}
-
-impl PrettyBench {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(PrettyBenchInner {
-                benchgroups: papaya::HashMap::new(),
-            }),
-        }
     }
 }

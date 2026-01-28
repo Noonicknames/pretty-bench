@@ -1,19 +1,21 @@
-use std::{convert::{TryFrom, TryInto}, io::{Read, Write}, num::NonZeroU64, sync::{Arc, Mutex, atomic::AtomicU64}, time::{Duration, Instant, SystemTime}};
+use std::{
+    convert::{TryFrom, TryInto},
+    io::{Read, Write},
+    num::NonZeroU64,
+    sync::{Arc, Mutex, atomic::AtomicU64},
+    time::{Duration, SystemTime},
+};
 
 #[derive(Debug)]
 pub enum BenchGroup {
     Individual {
         name: Arc<str>,
         date: SystemTime,
-        idx_counter: AtomicU64,
-        pending: papaya::HashMap<u64, Instant>,
         samples: Mutex<Vec<u64>>, // Mutexes are probably ideal
     },
     Bucketed {
         name: Arc<str>,
         date: SystemTime,
-        idx_counter: AtomicU64,
-        pending: papaya::HashMap<u64, Instant>,
         bucket_width: NonZeroU64,
         buckets: papaya::HashMap<u64, AtomicU64>,
     },
@@ -42,8 +44,6 @@ impl BenchGroup {
         Self::Individual {
             name,
             date: SystemTime::now(),
-            idx_counter: AtomicU64::new(0),
-            pending: papaya::HashMap::new(),
             samples: Mutex::new(Vec::new()),
         }
     }
@@ -51,8 +51,6 @@ impl BenchGroup {
         Self::Bucketed {
             name,
             date: SystemTime::now(),
-            idx_counter: AtomicU64::new(0),
-            pending: papaya::HashMap::new(),
             bucket_width: NonZeroU64::new(bucket_width.as_nanos() as u64).unwrap(),
             buckets: papaya::HashMap::new(),
         }
@@ -67,16 +65,12 @@ impl BenchGroup {
             } => Self::Bucketed {
                 name: Arc::clone(name),
                 date: *date,
-                idx_counter: AtomicU64::new(0),
-                pending: papaya::HashMap::new(),
                 bucket_width: *bucket_width,
                 buckets: papaya::HashMap::new(),
             },
             Self::Individual { name, date, .. } => Self::Individual {
                 name: Arc::clone(name),
                 date: *date,
-                idx_counter: AtomicU64::new(0),
-                pending: papaya::HashMap::new(),
                 samples: Mutex::new(Vec::new()),
             },
         }
@@ -84,9 +78,64 @@ impl BenchGroup {
     pub fn print_histogram(&self) {
         const BINS: usize = 32;
         const MAX_HIST_HEIGHT: usize = 150;
+
+        let mut time_min = u64::MAX;
+        let mut time_max = u64::MIN;
+        let time_range: NonZeroU64;
+        let tallest_bin: u64;
+        let mut bins: Vec<u64>;
+
         match self {
-            Self::Bucketed { .. } => {
-                todo!()
+            Self::Bucketed {
+                bucket_width,
+                buckets,
+                ..
+            } => {
+                let buckets_guard = buckets.guard();
+                let buckets = buckets
+                    .iter(&buckets_guard)
+                    .map(|(idx, bucket)| {
+                        (
+                            *idx * bucket_width.get() + bucket_width.get() / 2,
+                            bucket.load(std::sync::atomic::Ordering::Relaxed),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                if buckets.is_empty() {
+                    println!("No data.");
+                    return;
+                }
+
+                // Get mins and maxes
+                for (time, _) in buckets.iter() {
+                    time_min = time_min.min(*time);
+                    time_max = time_max.max(*time);
+                }
+
+                // Since we checked samples is not empty, it is safe to assume time_min and time_max are not still u64::MAX and u64::MIN.
+                // time_min <= time_max
+                let Some(range) = NonZeroU64::new(time_max - time_min) else {
+                    println!(
+                        "{:.5e} | {:#<width$}",
+                        time_min as f32 * 1e-9,
+                        "",
+                        width = buckets
+                            .iter()
+                            .map(|(_time, count)| *count as usize)
+                            .sum::<usize>(),
+                    );
+                    return;
+                };
+                time_range = range;
+
+                bins = vec![0u64; BINS];
+
+                for &(time, count) in buckets.iter() {
+                    bins[((time - time_min) * BINS as u64 / (range.get() + 1)) as usize] += count;
+                }
+
+                tallest_bin = bins.iter().cloned().max().unwrap();
             }
             Self::Individual { samples, .. } => {
                 let samples = samples.lock().unwrap();
@@ -95,9 +144,6 @@ impl BenchGroup {
                     println!("No data.");
                     return;
                 }
-
-                let mut time_min = u64::MAX;
-                let mut time_max = u64::MIN;
 
                 // Get mins and maxes
                 for &sample in samples.iter() {
@@ -117,33 +163,33 @@ impl BenchGroup {
                     );
                     return;
                 };
+                time_range = range;
 
-                let mut bins = vec![0u64; BINS];
+                bins = vec![0u64; BINS];
 
                 for &sample in samples.iter() {
                     bins[((sample - time_min) * BINS as u64 / (range.get() + 1)) as usize] += 1;
                 }
 
-                let tallest_bin = bins.iter().cloned().max().unwrap();
-
-                for (idx, &bin) in bins.iter().enumerate() {
-                    let time = time_min
-                        + idx as u64 * range.get() / BINS as u64
-                        + range.get() / BINS as u64 / 2;
-
-                    let hist_height = if tallest_bin > MAX_HIST_HEIGHT as u64 {
-                        (bin * MAX_HIST_HEIGHT as u64) / tallest_bin
-                    } else {
-                        bin
-                    };
-                    println!(
-                        "{:.5e} | {:#<width$}",
-                        time as f32 * 1e-9,
-                        "",
-                        width = hist_height as usize
-                    );
-                }
+                tallest_bin = bins.iter().cloned().max().unwrap();
             }
+        }
+
+        for (idx, &bin) in bins.iter().enumerate() {
+            let time =
+                time_min + idx as u64 * time_range.get() / BINS as u64 + time_range.get() / BINS as u64 / 2;
+
+            let hist_height = if tallest_bin > MAX_HIST_HEIGHT as u64 {
+                (bin * MAX_HIST_HEIGHT as u64) / tallest_bin
+            } else {
+                bin
+            };
+            println!(
+                "{:.5e} | {:#<width$}",
+                time as f32 * 1e-9,
+                "",
+                width = hist_height as usize
+            );
         }
     }
     pub fn name(&self) -> &Arc<str> {
@@ -250,7 +296,8 @@ impl BenchGroup {
             }
         }
     }
-
+    
+    // There seems to be a bug with importing bucketed data with different bucket widths
     pub fn import(&self, bench_group: &Self) {
         match (self, bench_group) {
             (
@@ -268,9 +315,9 @@ impl BenchGroup {
                 let buckets = buckets.pin();
                 let other_buckets = other_buckets.pin();
 
-                for (idx, other_count) in other_buckets.iter() {
+                for (other_idx, other_count) in other_buckets.iter() {
                     let count = buckets.get_or_insert(
-                        (*idx * other_bucket_width.get() + other_bucket_width.get() / 2)
+                        (*other_idx * other_bucket_width.get() + other_bucket_width.get() / 2)
                             / bucket_width.get(),
                         AtomicU64::new(0),
                     );
@@ -422,8 +469,6 @@ impl BenchGroup {
                 bench = BenchGroup::Bucketed {
                     name,
                     date,
-                    idx_counter: AtomicU64::new(0),
-                    pending: papaya::HashMap::new(),
                     bucket_width,
                     buckets,
                 };
@@ -465,8 +510,6 @@ impl BenchGroup {
                 bench = BenchGroup::Individual {
                     name,
                     date,
-                    idx_counter: AtomicU64::new(0),
-                    pending: papaya::HashMap::new(),
                     samples: Mutex::new(samples_vec),
                 };
             }

@@ -1,5 +1,5 @@
 [package]
-name = "pretty-bench-common"
+name = "pretty-bench"
 edition = "2024"
 
 [dependencies]

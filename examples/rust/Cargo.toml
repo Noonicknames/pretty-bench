@@ -1,0 +1,8 @@
+[package]
+name = "pretty-bench-example"
+edition = "2024"
+
+[workspace]
+
+[dependencies]
+pretty-bench = { path = "../../pretty-bench" }

@@ -1,18 +1,18 @@
 program pretty_bench_example
     use iso_fortran_env, only: int64
     use iso_c_binding, only: c_long_long
-    use pretty_bench, only: PrettyBench, pb_new, ArcStr, arc_str, ffi_str, pb_sleep
+    use pretty_bench, only: t_pretty_bench, pb_new, t_arc_str, arc_str, ffi_str, pb_sleep, duration_micros, t_duration, operator (+), operator (-)
     implicit none
-    type(PrettyBench) :: pb
-    type(ArcStr) :: bench_group_name
+    type(t_pretty_bench) :: pb
+    type(t_arc_str) :: bench_group_name
 
-    ! Creation of an ArcStr which can be efficiently copied.
+    ! Creation of an t_arc_str which can be efficiently copied.
     bench_group_name = arc_str("Diagonalisation of a 0x0 matrix")
 
-    ! An ArcStr can be converted to a character, dimension(:) and printed.
+    ! An t_arc_str can be converted to a character, dimension(:) and printed.
     print *, bench_group_name%as_f_str()
 
-    ! Create PrettyBench struct
+    ! Create t_pretty_bench struct
     pb = pb_new()
     
     ! Ensure to clone since we still want to keep a copy of the group name ourselves.
@@ -23,16 +23,16 @@ program pretty_bench_example
 
     ! Example benchmark
     block
-        integer(c_long_long) :: bench_id
+        type(t_duration) :: bench_id
         integer :: i
         do i = 1, 1000
-            bench_id = pb%start_bench(ffi_str(bench_group_name))
-            call pb_sleep(100000_int64)
+            bench_id = pb%start_bench()
+            call pb_sleep(duration_micros(100_int64) - duration_micros(100_int64))
             call pb%end_bench(ffi_str(bench_group_name), bench_id)
         end do
     end block
 
-    ! You can drop the ArcStr now, this will not delete pb's copy.
+    ! You can drop the t_arc_str now, this will not delete pb's copy.
     call bench_group_name%drop()
 
     ! Output to file

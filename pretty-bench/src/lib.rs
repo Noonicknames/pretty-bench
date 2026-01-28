@@ -14,3 +14,5 @@ mod pretty_bench;
 pub mod ffi;
 
 pub use self::{bench_group::*, pretty_bench::*};
+
+pub use spin_sleep::sleep;

@@ -1,5 +1,5 @@
 [workspace]
-members = ["common", "bindings"]
+members = ["pretty-bench", "bindings"]
 resolver = "2"
 
 [workspace.package]
