@@ -8,3 +8,23 @@ spin_sleep = { workspace = true }
 
 [features]
 ffi = []
+
+[dev-dependencies]
+criterion.workspace = true
+rayon.workspace = true
+
+[[bench]]
+name = "single-thread-individual"
+harness = false
+
+[[bench]]
+name = "single-thread-bucketed"
+harness = false
+
+[[bench]]
+name = "multi-thread-individual"
+harness = false
+
+[[bench]]
+name = "multi-thread-bucketed"
+harness = false

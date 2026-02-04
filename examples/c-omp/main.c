@@ -23,10 +23,10 @@ void main() {
     pb_import_from_file(pb, str_from_c_str("test.bench"));
 
     // Example benchmark
-    // #pragma omp parallel for
-    for (int i = 0; i < 1000*1000; i++) {
+    #pragma omp parallel for
+    for (int i = 0; i < 1000; i++) {
         auto bench_id = pb_start_bench(pb);
-        pb_sleep(duration_micros(10));
+        pb_sleep(duration_micros(100));
         pb_end_bench(pb, bench_group_name, bench_id);
     }
 

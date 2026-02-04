@@ -6,3 +6,4 @@ edition = "2024"
 
 [dependencies]
 pretty-bench = { path = "../../pretty-bench" }
+rayon = "1.11.0"

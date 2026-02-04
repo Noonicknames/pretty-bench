@@ -1,9 +1,14 @@
 use std::{
-    convert::{TryFrom, TryInto},
     io::{Read, Write},
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
+
+use core::{
+    convert::{TryFrom, TryInto},
     num::NonZeroU64,
-    sync::{Arc, Mutex, atomic::AtomicU64},
-    time::{Duration, SystemTime},
+    sync::atomic::AtomicU64,
+    time::Duration,
 };
 
 #[derive(Debug)]
@@ -78,9 +83,15 @@ impl BenchGroup {
     pub fn print_histogram(&self) {
         const BINS: usize = 32;
         const MAX_HIST_HEIGHT: usize = 150;
+        const VIEW_STANDARD_DEVIATIONS: f64 = 1.0;
+        const OUTLIER_STANDARD_DEVIATIONS: f64 = 3.0;
 
-        let mut time_min = u64::MAX;
-        let mut time_max = u64::MIN;
+        let mut average: f64;
+        let mut standard_deviation: f64;
+        let mut sample_count: u64;
+        let mut outlier_count: u64;
+        let lower_time: u64;
+        let upper_time: u64;
         let time_range: NonZeroU64;
         let tallest_bin: u64;
         let mut bins: Vec<u64>;
@@ -107,32 +118,59 @@ impl BenchGroup {
                     return;
                 }
 
-                // Get mins and maxes
-                for (time, _) in buckets.iter() {
-                    time_min = time_min.min(*time);
-                    time_max = time_max.max(*time);
-                }
+                sample_count = 0;
+                average = 0.0;
+                standard_deviation = 0.0;
 
-                // Since we checked samples is not empty, it is safe to assume time_min and time_max are not still u64::MAX and u64::MIN.
-                // time_min <= time_max
-                let Some(range) = NonZeroU64::new(time_max - time_min) else {
-                    println!(
-                        "{:.5e} | {:#<width$}",
-                        time_min as f32 * 1e-9,
-                        "",
-                        width = buckets
-                            .iter()
-                            .map(|(_time, count)| *count as usize)
-                            .sum::<usize>(),
-                    );
-                    return;
-                };
-                time_range = range;
+                // Get average, sample_count and standard deviation
+                for &(time, count) in buckets.iter() {
+                    average += (time * count) as f64;
+                    sample_count += count;
+                    standard_deviation += (time as f64) * (time as f64) * count as f64;
+                }
+                average = average / sample_count as f64;
+                standard_deviation =
+                    f64::sqrt(standard_deviation / sample_count as f64 - average * average);
+
+                let lower_outlier = (average - standard_deviation * OUTLIER_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+                let upper_outlier = (average + standard_deviation * OUTLIER_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+
+                outlier_count = 0;
+                sample_count = 0;
+                average = 0.0;
+                standard_deviation = 0.0;
+                // Get average, sample_count and standard deviation without outliers
+                for &(time, count) in buckets.iter() {
+                    if (lower_outlier..=upper_outlier).contains(&time) {
+                        average += (time * count) as f64;
+                        sample_count += count;
+                        standard_deviation += (time as f64) * (time as f64) * count as f64;
+                    } else {
+                        outlier_count += count;
+                    }
+                }
+                average = average / sample_count as f64;
+                standard_deviation =
+                    f64::sqrt(standard_deviation / sample_count as f64 - average * average);
+
+                lower_time = (average - standard_deviation * VIEW_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+                upper_time = (average + standard_deviation * VIEW_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+                time_range = unsafe { NonZeroU64::new_unchecked(upper_time - lower_time + 1) };
 
                 bins = vec![0u64; BINS];
 
                 for &(time, count) in buckets.iter() {
-                    bins[((time - time_min) * BINS as u64 / (range.get() + 1)) as usize] += count;
+                    if (lower_time..=upper_time).contains(&time) {
+                        bins[((time - lower_time) * BINS as u64 / time_range) as usize] += count;
+                    }
                 }
 
                 tallest_bin = bins.iter().cloned().max().unwrap();
@@ -145,39 +183,76 @@ impl BenchGroup {
                     return;
                 }
 
-                // Get mins and maxes
-                for &sample in samples.iter() {
-                    time_min = time_min.min(sample);
-                    time_max = time_max.max(sample);
+                sample_count = samples.len() as u64;
+                average = 0.0;
+                standard_deviation = 0.0;
+
+                // Get average, sample_count and standard deviation
+                for &sample_time in samples.iter() {
+                    average += sample_time as f64;
+                    standard_deviation += (sample_time as f64) * (sample_time as f64);
                 }
+                average = average / sample_count as f64;
+                standard_deviation =
+                    f64::sqrt(standard_deviation / sample_count as f64 - average * average);
 
-                // Since we checked samples is not empty, it is safe to assume time_min and time_max are not still u64::MAX and u64::MIN.
-                // time_min <= time_max
+                let lower_outlier = (average - standard_deviation * OUTLIER_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+                let upper_outlier = (average + standard_deviation * OUTLIER_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
 
-                let Some(range) = NonZeroU64::new(time_max - time_min) else {
-                    println!(
-                        "{:.5e} | {:#<width$}",
-                        time_min as f32 * 1e-9,
-                        "",
-                        width = samples.len()
-                    );
-                    return;
-                };
-                time_range = range;
+                outlier_count = 0;
+                sample_count = 0;
+                average = 0.0;
+                standard_deviation = 0.0;
+                // Get average, sample_count and standard deviation without outliers
+                for &sample_time in samples.iter() {
+                    if (lower_outlier..=upper_outlier).contains(&sample_time) {
+                        average += sample_count as f64;
+                        sample_count += 1;
+                        standard_deviation += (sample_time as f64) * (sample_time as f64);
+                    } else {
+                        outlier_count += 1;
+                    }
+                }
+                average = average / sample_count as f64;
+                standard_deviation =
+                    f64::sqrt(standard_deviation / sample_count as f64 - average * average);
+
+                lower_time = (average - standard_deviation * VIEW_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+                upper_time = (average + standard_deviation * VIEW_STANDARD_DEVIATIONS)
+                    .floor()
+                    .max(0.0) as u64;
+                time_range = unsafe { NonZeroU64::new_unchecked(upper_time - lower_time + 1) };
 
                 bins = vec![0u64; BINS];
 
-                for &sample in samples.iter() {
-                    bins[((sample - time_min) * BINS as u64 / (range.get() + 1)) as usize] += 1;
+                for &sample_time in samples.iter() {
+                    if (lower_time..=upper_time).contains(&sample_time) {
+                        bins[((sample_time - lower_time) * BINS as u64 / time_range.get())
+                            as usize] += 1;
+                    }
                 }
 
                 tallest_bin = bins.iter().cloned().max().unwrap();
             }
         }
 
+        println!(
+            "   Average: {:.4e}, Standard deviation: {:.4e}, Outliers: {}",
+            standard_deviation * 1e-9,
+            average * 1e-9,
+            outlier_count,
+        );
+
         for (idx, &bin) in bins.iter().enumerate() {
-            let time =
-                time_min + idx as u64 * time_range.get() / BINS as u64 + time_range.get() / BINS as u64 / 2;
+            let time = lower_time
+                + idx as u64 * time_range.get() / BINS as u64
+                + time_range.get() / BINS as u64 / 2;
 
             let hist_height = if tallest_bin > MAX_HIST_HEIGHT as u64 {
                 (bin * MAX_HIST_HEIGHT as u64) / tallest_bin
@@ -185,7 +260,7 @@ impl BenchGroup {
                 bin
             };
             println!(
-                "{:.5e} | {:#<width$}",
+                "{:.4e} | {:#<width$}",
                 time as f32 * 1e-9,
                 "",
                 width = hist_height as usize
@@ -239,18 +314,18 @@ impl BenchGroup {
                     + samples.len() * size_of::<u64>(); // samples
 
                 // Length, date, type
-                output.write(&length.to_be_bytes())?;
-                output.write(&date_since_epoch.to_be_bytes())?;
-                output.write(&(self.sample_type() as u8).to_be_bytes())?;
+                output.write(&length.to_le_bytes())?;
+                output.write(&date_since_epoch.to_le_bytes())?;
+                output.write(&(self.sample_type() as u8).to_le_bytes())?;
 
                 // Write name
                 let name_length = name_length as u16;
-                output.write(&name_length.to_be_bytes())?;
+                output.write(&name_length.to_le_bytes())?;
                 output.write(name.as_bytes())?;
 
                 for time in samples.iter() {
                     // Max time stored for a u64 is 584.5 years, should be enough.
-                    output.write(&time.to_be_bytes())?;
+                    output.write(&time.to_le_bytes())?;
                 }
                 Ok(length)
             }
@@ -274,29 +349,29 @@ impl BenchGroup {
                     + buckets.len() * (size_of::<u64>() + size_of::<u64>()); // buckets
 
                 // length, date, type, bucket width
-                output.write(&length.to_be_bytes())?;
-                output.write(&date_since_epoch.to_be_bytes())?;
-                output.write(&(self.sample_type() as u8).to_be_bytes())?;
-                output.write(&bucket_width.get().to_be_bytes())?;
+                output.write(&length.to_le_bytes())?;
+                output.write(&date_since_epoch.to_le_bytes())?;
+                output.write(&(self.sample_type() as u8).to_le_bytes())?;
+                output.write(&bucket_width.get().to_le_bytes())?;
 
                 // Write name
                 let name_length = name_length as u16;
-                output.write(&name_length.to_be_bytes())?;
+                output.write(&name_length.to_le_bytes())?;
                 output.write(name.as_bytes())?;
 
                 for (bucket_idx, count) in buckets_iter {
-                    output.write(&bucket_idx.to_be_bytes())?;
+                    output.write(&bucket_idx.to_le_bytes())?;
                     output.write(
                         &count
                             .load(std::sync::atomic::Ordering::Relaxed)
-                            .to_be_bytes(),
+                            .to_le_bytes(),
                     )?;
                 }
                 Ok(length)
             }
         }
     }
-    
+
     // There seems to be a bug with importing bucketed data with different bucket widths
     pub fn import(&self, bench_group: &Self) {
         match (self, bench_group) {
@@ -382,9 +457,9 @@ impl BenchGroup {
         let mut buf = [0u8; 32];
 
         input.read_exact(&mut buf[..HEADER_SIZE])?;
-        let length = u64::from_be_bytes(buf[0..size_of::<u64>()].try_into().unwrap());
+        let length = u64::from_le_bytes(buf[0..size_of::<u64>()].try_into().unwrap());
         let mut input = input.take(length - HEADER_SIZE as u64);
-        let date = u128::from_be_bytes(
+        let date = u128::from_le_bytes(
             buf[size_of::<u64>()..size_of::<u64>() + size_of::<u128>()]
                 .try_into()
                 .unwrap(),
@@ -394,7 +469,7 @@ impl BenchGroup {
                 (date / 1_000_000_000u128) as u64,
                 (date % 1_000_000_000u128) as u32,
             );
-        let sample_type_num = u8::from_be_bytes(
+        let sample_type_num = u8::from_le_bytes(
             buf[size_of::<u64>() + size_of::<u128>()
                 ..size_of::<u64>() + size_of::<u128>() + size_of::<u8>()]
                 .try_into()
@@ -415,7 +490,7 @@ impl BenchGroup {
         match sample_type {
             SampleType::Bucketed => {
                 input.read_exact(&mut buf[..size_of::<u64>()])?;
-                let bucket_width = NonZeroU64::new(u64::from_be_bytes(
+                let bucket_width = NonZeroU64::new(u64::from_le_bytes(
                     buf[..size_of::<u64>()].try_into().unwrap(),
                 ))
                 .ok_or_else(|| {
@@ -426,7 +501,7 @@ impl BenchGroup {
                 })?;
 
                 input.read_exact(&mut buf[..size_of::<u16>()])?;
-                let name_length = u16::from_be_bytes(buf[..size_of::<u16>()].try_into().unwrap());
+                let name_length = u16::from_le_bytes(buf[..size_of::<u16>()].try_into().unwrap());
                 let mut name_bytes =
                     unsafe { Arc::<[u8]>::new_uninit_slice(name_length as usize).assume_init() };
                 input.read_exact(unsafe { Arc::get_mut(&mut name_bytes).unwrap_unchecked() })?;
@@ -454,8 +529,8 @@ impl BenchGroup {
                         let ([idx_bytes, count_bytes], []) = bucket_bytes.as_chunks() else {
                             unreachable!()
                         };
-                        let idx = u64::from_be_bytes(*idx_bytes);
-                        let count = u64::from_be_bytes(*count_bytes);
+                        let idx = u64::from_le_bytes(*idx_bytes);
+                        let count = u64::from_le_bytes(*count_bytes);
 
                         buckets.insert(idx, AtomicU64::new(count), &buckets_guard);
                     }
@@ -475,7 +550,7 @@ impl BenchGroup {
             }
             SampleType::Individual => {
                 input.read_exact(&mut buf[..size_of::<u16>()])?;
-                let name_length = u16::from_be_bytes(buf[..size_of::<u16>()].try_into().unwrap());
+                let name_length = u16::from_le_bytes(buf[..size_of::<u16>()].try_into().unwrap());
                 let mut name_bytes =
                     unsafe { Arc::<[u8]>::new_uninit_slice(name_length as usize).assume_init() };
                 input.read_exact(unsafe { Arc::get_mut(&mut name_bytes).unwrap_unchecked() })?;
@@ -498,7 +573,7 @@ impl BenchGroup {
                     let (samples, remainder) = buf[0..buf_start + read_length].as_chunks::<8>();
 
                     for sample in samples {
-                        let sample = u64::from_be_bytes(*sample);
+                        let sample = u64::from_le_bytes(*sample);
                         samples_vec.push(sample)
                     }
                     let read_len = samples.len() * 8;

@@ -1,6 +1,5 @@
-extern crate pretty_bench;
-
 use pretty_bench::PrettyBench;
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{fs::OpenOptions, io, sync::Arc, time::Duration};
 
 fn main() -> io::Result<()> {
@@ -10,7 +9,7 @@ fn main() -> io::Result<()> {
 
     let pb = PrettyBench::new();
 
-    pb.create_bench_group_individual(Arc::clone(&bench_group_name));
+    pb.create_bench_group_bucketed(Arc::clone(&bench_group_name), Duration::from_nanos(10));
 
     match OpenOptions::new().read(true).open("test.bench") {
         Ok(file) => pb.deserialise_import(file)?,
@@ -21,11 +20,11 @@ fn main() -> io::Result<()> {
     };
 
     // Example benchmark
-    for _ in 0..1000 {
+    (0..1_000_000).into_par_iter().for_each(|_| {
         let bench_id = pb.start_bench();
         pretty_bench::sleep(Duration::from_micros(10));
         _ = pb.end_bench(bench_group_name.as_ref(), bench_id);
-    }
+    });
 
     pb.print_histograms();
 

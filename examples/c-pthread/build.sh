@@ -5,7 +5,7 @@ source ./env.sh
 mkdir out
 
 compiler=gcc
-flags=(-std=c23 -O2  -L../../target/release -lpretty_bench)
+flags=(-std=c23 -O3  -L../../target/release -lpretty_bench)
 
 ${compiler} ${flags[@]} -c main.c -o out/main.o
 

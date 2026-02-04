@@ -1,7 +1,9 @@
 use std::{
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
+
+use core::time::Duration;
 
 use crate::{PrettyBench, PrettyBenchInner};
 

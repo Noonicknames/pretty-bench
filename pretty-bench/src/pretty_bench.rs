@@ -1,7 +1,12 @@
 use std::{
     io::{Read, Write},
-    sync::{Arc, atomic::AtomicU64},
-    time::{Duration, Instant},
+    sync::Arc,
+    time::Instant,
+};
+
+use core::{
+    sync::atomic::AtomicU64,
+    time::Duration,
 };
 
 use crate::BenchGroup;
